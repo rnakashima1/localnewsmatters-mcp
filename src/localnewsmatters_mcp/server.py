@@ -10,7 +10,10 @@ Tools (actions over the live catalog):
     * search_articles / get_article / get_article_by_slug
     * list_recent_articles
     * search_photos / get_photo / get_article_photos
-    * list_categories / list_tags / list_authors
+    * list_categories / get_category / list_tags / get_tag / list_authors
+    * list_pages
+
+Most read tools accept ``response_format="json"`` (default) or ``"markdown"``.
 
 Resources (read-only data addressable by URI template):
     * lnm://article/{id}        -- a single article as JSON
@@ -23,10 +26,12 @@ Resources (read-only data addressable by URI template):
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
+from .formatting import ResponseFormat, to_markdown
 from .wp_client import LocalNewsMattersClient, WordPressError
 
 mcp = FastMCP(
@@ -44,6 +49,16 @@ mcp = FastMCP(
 _client = LocalNewsMattersClient()
 
 
+# Validated parameter aliases. Bounds are enforced by the MCP/pydantic layer
+# before the tool body runs, so callers get a clear error instead of a bad request.
+Query = Annotated[str, Field(max_length=200)]
+Page = Annotated[int, Field(ge=1)]
+PerPage = Annotated[int, Field(ge=1, le=100)]
+ItemId = Annotated[int, Field(ge=1)]
+OptionalId = Annotated[int | None, Field(ge=1)]
+Slug = Annotated[str, Field(min_length=1, max_length=200)]
+
+
 def _dumps(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
@@ -56,6 +71,13 @@ async def _safe(coro) -> Any:
         return {"error": str(exc)}
 
 
+def _render(data: Any, kind: str, response_format: ResponseFormat) -> str:
+    """Serialize ``data`` as JSON (default) or Markdown per ``response_format``."""
+    if response_format == ResponseFormat.MARKDOWN:
+        return to_markdown(data, kind)
+    return _dumps(data)
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -63,14 +85,15 @@ async def _safe(coro) -> Any:
 
 @mcp.tool()
 async def search_articles(
-    query: str = "",
-    page: int = 1,
-    per_page: int = 10,
+    query: Query = "",
+    page: Page = 1,
+    per_page: PerPage = 10,
     category_ids: list[int] | None = None,
     tag_ids: list[int] | None = None,
-    author_id: int | None = None,
+    author_id: OptionalId = None,
     after: str | None = None,
     before: str | None = None,
+    response_format: ResponseFormat = ResponseFormat.JSON,
 ) -> str:
     """Search Local News Matters articles.
 
@@ -83,8 +106,9 @@ async def search_articles(
         author_id: Restrict to a single author (see list_authors).
         after: ISO-8601 date; only articles published on/after it (e.g. "2024-01-01T00:00:00").
         before: ISO-8601 date; only articles published on/before it.
+        response_format: "json" (default) for raw data, or "markdown" for readable text.
 
-    Returns a JSON object with `results` (article summaries), `total`, `total_pages`, `page`.
+    Returns `results` (article summaries) plus `total`, `total_pages`, `page`.
     """
     result = await _safe(
         _client.search_articles(
@@ -98,37 +122,45 @@ async def search_articles(
             before=before,
         )
     )
-    return _dumps(result)
+    return _render(result, "article_search", response_format)
 
 
 @mcp.tool()
-async def list_recent_articles(per_page: int = 10) -> str:
+async def list_recent_articles(
+    per_page: PerPage = 10, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
     """List the most recently published Local News Matters articles."""
     result = await _safe(_client.search_articles(per_page=per_page))
-    return _dumps(result)
+    return _render(result, "article_search", response_format)
 
 
 @mcp.tool()
-async def get_article(article_id: int) -> str:
+async def get_article(
+    article_id: ItemId, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
     """Fetch a single article by numeric ID, including full body text."""
-    return _dumps(await _safe(_client.get_article(article_id)))
+    result = await _safe(_client.get_article(article_id))
+    return _render(result, "article", response_format)
 
 
 @mcp.tool()
-async def get_article_by_slug(slug: str) -> str:
+async def get_article_by_slug(
+    slug: Slug, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
     """Fetch a single article by its URL slug (the last path segment of its URL)."""
     result = await _safe(_client.get_article_by_slug(slug))
     if result is None:
-        return _dumps({"error": f"No article found with slug '{slug}'."})
-    return _dumps(result)
+        result = {"error": f"No article found with slug '{slug}'."}
+    return _render(result, "article", response_format)
 
 
 @mcp.tool()
 async def search_photos(
-    query: str = "",
-    page: int = 1,
-    per_page: int = 10,
-    article_id: int | None = None,
+    query: Query = "",
+    page: Page = 1,
+    per_page: PerPage = 10,
+    article_id: OptionalId = None,
+    response_format: ResponseFormat = ResponseFormat.JSON,
 ) -> str:
     """Search photos/images in the Local News Matters media library.
 
@@ -137,8 +169,9 @@ async def search_photos(
         page: 1-based page number.
         per_page: Results per page (1-100).
         article_id: Restrict to photos attached to a specific article.
+        response_format: "json" (default) for raw data, or "markdown" for readable text.
 
-    Returns JSON with `results` (photo summaries incl. `source_url`), `total`, `total_pages`.
+    Returns `results` (photo summaries incl. `source_url`) plus `total`, `total_pages`.
     """
     result = await _safe(
         _client.search_photos(
@@ -148,37 +181,79 @@ async def search_photos(
             parent_article=article_id,
         )
     )
-    return _dumps(result)
+    return _render(result, "photo_search", response_format)
 
 
 @mcp.tool()
-async def get_photo(photo_id: int) -> str:
+async def get_photo(
+    photo_id: ItemId, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
     """Fetch a single photo by numeric ID, including caption, alt text and available sizes."""
-    return _dumps(await _safe(_client.get_photo(photo_id)))
+    result = await _safe(_client.get_photo(photo_id))
+    return _render(result, "photo", response_format)
 
 
 @mcp.tool()
-async def get_article_photos(article_id: int) -> str:
+async def get_article_photos(
+    article_id: ItemId, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
     """List every photo attached to a given article."""
-    return _dumps(await _safe(_client.get_article_photos(article_id)))
+    result = await _safe(_client.get_article_photos(article_id))
+    return _render(result, "article_photos", response_format)
 
 
 @mcp.tool()
-async def list_categories() -> str:
+async def list_categories(
+    response_format: ResponseFormat = ResponseFormat.JSON,
+) -> str:
     """List the site's categories (sections), ordered by article count."""
-    return _dumps(await _safe(_client.list_categories()))
+    result = await _safe(_client.list_categories())
+    return _render(result, "categories", response_format)
 
 
 @mcp.tool()
-async def list_tags(search: str = "") -> str:
+async def get_category(
+    category_id: ItemId, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
+    """Fetch a single category by ID, including its description and article count."""
+    result = await _safe(_client.get_category(category_id))
+    return _render(result, "category", response_format)
+
+
+@mcp.tool()
+async def list_tags(
+    search: Query = "", response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
     """List topic tags, optionally filtered by a search term, ordered by usage."""
-    return _dumps(await _safe(_client.list_tags(search=search or None)))
+    result = await _safe(_client.list_tags(search=search or None))
+    return _render(result, "tags", response_format)
 
 
 @mcp.tool()
-async def list_authors() -> str:
+async def get_tag(
+    tag_id: ItemId, response_format: ResponseFormat = ResponseFormat.JSON
+) -> str:
+    """Fetch a single tag by ID, including its description and article count."""
+    result = await _safe(_client.get_tag(tag_id))
+    return _render(result, "tag", response_format)
+
+
+@mcp.tool()
+async def list_authors(
+    response_format: ResponseFormat = ResponseFormat.JSON,
+) -> str:
     """List the site's authors/contributors."""
-    return _dumps(await _safe(_client.list_authors()))
+    result = await _safe(_client.list_authors())
+    return _render(result, "authors", response_format)
+
+
+@mcp.tool()
+async def list_pages(
+    response_format: ResponseFormat = ResponseFormat.JSON,
+) -> str:
+    """List the site's static pages (About, Contact, Donate, etc.), sorted by title."""
+    result = await _safe(_client.list_pages())
+    return _render(result, "pages", response_format)
 
 
 # ---------------------------------------------------------------------------

@@ -23,8 +23,15 @@ LLM-friendly objects.
 | `get_photo` | A single photo's metadata + every available size. |
 | `get_article_photos` | All photos attached to a given article. |
 | `list_categories` | Site sections, ordered by article count. |
+| `get_category` | A single category by ID (name, slug, description, count). |
 | `list_tags` | Topic tags (optionally filtered). |
+| `get_tag` | A single tag by ID (name, slug, description, count). |
 | `list_authors` | Contributors / authors. |
+| `list_pages` | Static pages (About, Contact, Donate, …), sorted by title. |
+
+Every read tool above accepts an optional `response_format` argument — `"json"`
+(the default, raw structured data) or `"markdown"` (compact, human-readable
+text).
 
 ### Resources (addressable by URI)
 

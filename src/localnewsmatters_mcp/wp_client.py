@@ -244,9 +244,26 @@ class LocalNewsMattersClient:
         )
         return [summarize_term(t) for t in resp.json()]
 
+    async def get_category(self, category_id: int) -> dict[str, Any]:
+        resp = await self._get(f"categories/{category_id}")
+        return summarize_term(resp.json())
+
+    async def get_tag(self, tag_id: int) -> dict[str, Any]:
+        resp = await self._get(f"tags/{tag_id}")
+        return summarize_term(resp.json())
+
     async def list_authors(self, *, per_page: int = 100) -> list[dict[str, Any]]:
         resp = await self._get("users", {"per_page": min(per_page, 100)})
         return [summarize_author(a) for a in resp.json()]
+
+    # -- static pages ------------------------------------------------------
+
+    async def list_pages(self, *, per_page: int = 50) -> list[dict[str, Any]]:
+        resp = await self._get(
+            "pages",
+            {"per_page": min(per_page, 100), "orderby": "title", "order": "asc"},
+        )
+        return [summarize_page(p) for p in resp.json()]
 
 
 def _csv(values: Iterable[int] | None) -> str | None:
@@ -360,8 +377,20 @@ def summarize_term(term: dict[str, Any]) -> dict[str, Any]:
         "name": term.get("name"),
         "slug": term.get("slug"),
         "count": term.get("count"),
+        "parent": term.get("parent") or None,
         "description": strip_html(term.get("description", "")),
         "url": term.get("link"),
+    }
+
+
+def summarize_page(page: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": page.get("id"),
+        "title": _rendered(page.get("title")),
+        "slug": page.get("slug"),
+        "url": page.get("link"),
+        "date": page.get("date"),
+        "modified": page.get("modified"),
     }
 
 

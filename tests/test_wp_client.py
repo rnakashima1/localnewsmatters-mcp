@@ -15,6 +15,7 @@ from localnewsmatters_mcp.wp_client import (
     strip_html,
     summarize_article,
     summarize_photo,
+    summarize_term,
 )
 
 API = "https://localnewsmatters.org/wp-json/wp/v2"
@@ -180,6 +181,60 @@ async def test_network_failure_raises_wordpress_error():
     async with LocalNewsMattersClient() as client:
         with pytest.raises(WordPressError):
             await client.search_articles()
+
+
+def test_summarize_term_exposes_parent_when_present():
+    assert summarize_term({"id": 5, "name": "Gov", "parent": 0})["parent"] is None
+    assert summarize_term({"id": 6, "name": "City", "parent": 5})["parent"] == 5
+
+
+@respx.mock
+async def test_get_category_normalizes_term():
+    respx.get(f"{API}/categories/5").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": 5, "name": "Government", "slug": "gov", "count": 12, "link": "https://x/gov"},
+        )
+    )
+    async with LocalNewsMattersClient() as client:
+        cat = await client.get_category(5)
+    assert cat["name"] == "Government"
+    assert cat["count"] == 12
+
+
+@respx.mock
+async def test_get_tag_normalizes_term():
+    respx.get(f"{API}/tags/9").mock(
+        return_value=httpx.Response(200, json={"id": 9, "name": "Budget", "slug": "budget", "count": 3})
+    )
+    async with LocalNewsMattersClient() as client:
+        tag = await client.get_tag(9)
+    assert tag["id"] == 9
+    assert tag["name"] == "Budget"
+
+
+@respx.mock
+async def test_list_pages_sorts_by_title_and_normalizes():
+    route = respx.get(f"{API}/pages").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 2,
+                    "title": {"rendered": "About Us"},
+                    "slug": "about",
+                    "link": "https://localnewsmatters.org/about/",
+                    "date": "2020-01-01T00:00:00",
+                    "modified": "2024-01-01T00:00:00",
+                }
+            ],
+        )
+    )
+    async with LocalNewsMattersClient() as client:
+        pages = await client.list_pages()
+    assert route.calls.last.request.url.params["orderby"] == "title"
+    assert pages[0]["title"] == "About Us"
+    assert pages[0]["url"].endswith("/about/")
 
 
 def test_base_url_override_via_env(monkeypatch):
